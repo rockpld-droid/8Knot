@@ -1,15 +1,17 @@
+import logging
+import time
+
+import cache_manager.cache_facade as cf
 import dash_bootstrap_components as dbc
+import numpy as np
+import pandas as pd
+import plotly.graph_objects as go
+from components.visualization import VisualizationAIO
 from dash import callback
 from dash.dependencies import Input, Output
-import plotly.graph_objects as go
-import pandas as pd
-import logging
-from pages.utils.graph_utils import get_graph_time_values, baby_blue
+from pages.utils.graph_utils import baby_blue, get_graph_time_values
 from pages.utils.job_utils import nodata_graph
 from queries.prs_query import prs_query as prq
-import time
-import cache_manager.cache_facade as cf
-from components.visualization import VisualizationAIO
 
 PAGE = "contributions"
 VIZ_ID = "prs-over-time"
@@ -67,8 +69,8 @@ gc_pr_over_time = VisualizationAIO(
 )
 def prs_over_time_graph(repolist, interval):
     # wait for data to asynchronously download and become available.
-    while not_cached := cf.get_uncached(func_name=prq.__name__, repolist=repolist):
-        logging.warning(f"PULL REQUESTS OVER TIME - WAITING ON DATA TO BECOME AVAILABLE")
+    while cf.get_uncached(func_name=prq.__name__, repolist=repolist):
+        logging.warning("PULL REQUESTS OVER TIME - WAITING ON DATA TO BECOME AVAILABLE")
         time.sleep(0.5)
 
     # data ready.
@@ -117,20 +119,44 @@ def process_data(df: pd.DataFrame, interval):
     created_range = df["created_at"].dt.to_period(interval).value_counts().sort_index()
 
     # converts to data frame object and created date column from period values
-    df_created = created_range.to_frame().reset_index().rename(columns={"created_at": "Date", "count": "created_at"})
+    df_created = (
+        created_range.to_frame()
+        .reset_index()
+        .rename(columns={"created_at": "Date", "count": "created_at"})
+    )
 
     # converts date column to a datetime object, converts to string first to handle period information
     # the period slice is to handle weekly corner case
-    df_created["Date"] = pd.to_datetime(df_created["Date"].astype(str).str[:period_slice])
+    df_created["Date"] = pd.to_datetime(
+        df_created["Date"].astype(str).str[:period_slice]
+    )
 
     # df for merged prs in time interval
-    merged_range = pd.to_datetime(df["merged_at"]).dt.to_period(interval).value_counts().sort_index()
-    df_merged = merged_range.to_frame().reset_index().rename(columns={"merged_at": "Date", "count": "merged_at"})
+    merged_range = (
+        pd.to_datetime(df["merged_at"])
+        .dt.to_period(interval)
+        .value_counts()
+        .sort_index()
+    )
+    df_merged = (
+        merged_range.to_frame()
+        .reset_index()
+        .rename(columns={"merged_at": "Date", "count": "merged_at"})
+    )
     df_merged["Date"] = pd.to_datetime(df_merged["Date"].astype(str).str[:period_slice])
 
     # df for closed prs in time interval
-    closed_range = pd.to_datetime(df["closed_at"]).dt.to_period(interval).value_counts().sort_index()
-    df_closed = closed_range.to_frame().reset_index().rename(columns={"closed_at": "Date", "count": "closed_at"})
+    closed_range = (
+        pd.to_datetime(df["closed_at"])
+        .dt.to_period(interval)
+        .value_counts()
+        .sort_index()
+    )
+    df_closed = (
+        closed_range.to_frame()
+        .reset_index()
+        .rename(columns={"closed_at": "Date", "count": "closed_at"})
+    )
     df_closed["Date"] = pd.to_datetime(df_closed["Date"].astype(str).str[:period_slice])
 
     # A single df created for plotting merged and closed as stacked bar chart
@@ -144,7 +170,9 @@ def process_data(df: pd.DataFrame, interval):
         df_created["Date"] = df_created["Date"].dt.strftime("%Y-01-01")
         df_closed_merged["Date"] = df_closed_merged["Date"].dt.strftime("%Y-01-01")
 
-    df_closed_merged["closed_at"] = df_closed_merged["closed_at"] - df_closed_merged["merged_at"]
+    df_closed_merged["closed_at"] = (
+        df_closed_merged["closed_at"] - df_closed_merged["merged_at"]
+    )
 
     # ----- Open PR processinging starts here ----
 
@@ -160,7 +188,16 @@ def process_data(df: pd.DataFrame, interval):
     df_open = dates.to_frame(index=False, name="Date")
 
     # aplies function to get the amount of open prs for each day
-    df_open["Open"] = df_open.apply(lambda row: get_open(df, row.Date), axis=1)
+    # Optimization: Vectorized calculation using np.searchsorted
+    # Instead of O(N*D) dataframe filtering in a loop, we sort the dates and use binary search
+    # open_count = (created <= date) - (closed <= date)
+    created_counts = np.searchsorted(
+        np.sort(df["created_at"].values), dates.values, side="right"
+    )
+    closed_counts = np.searchsorted(
+        np.sort(df["closed_at"].dropna().values), dates.values, side="right"
+    )
+    df_open["Open"] = created_counts - closed_counts
 
     df_open["Date"] = df_open["Date"].dt.strftime("%Y-%m-%d")
 
@@ -184,7 +221,7 @@ def create_figure(
         opacity=0.9,
         hovertemplate=hover + "<br>Created: %{y}<br>" + "<extra></extra>",
         offsetgroup=0,
-        marker=dict(color=baby_blue[6]),
+        marker={"color": baby_blue[6]},
         name="Opened",
     )
     fig.add_bar(
@@ -193,17 +230,20 @@ def create_figure(
         opacity=0.9,
         hovertemplate=hover + "<br>Merged: %{y}<br>" + "<extra></extra>",
         offsetgroup=1,
-        marker=dict(color=baby_blue[0]),
+        marker={"color": baby_blue[0]},
         name="Merged",
     )
     fig.add_bar(
         x=df_closed_merged["Date"],
         y=df_closed_merged["closed_at"],
         opacity=0.9,
-        hovertemplate=[f"{hover}<br>Closed: {val}<br><extra></extra>" for val in df_closed_merged["closed_at"]],
+        hovertemplate=[
+            f"{hover}<br>Closed: {val}<br><extra></extra>"
+            for val in df_closed_merged["closed_at"]
+        ],
         offsetgroup=1,
         base=df_closed_merged["merged_at"],
-        marker=dict(color=baby_blue[2]),
+        marker={"color": baby_blue[2]},
         name="Closed",
     )
     fig.update_xaxes(
@@ -218,33 +258,17 @@ def create_figure(
         yaxis_title="Number of PRs",
         bargroupgap=0.1,
         margin_b=40,
-        font=dict(size=14),
+        font={"size": 14},
     )
     fig.add_trace(
         go.Scatter(
             x=df_open["Date"],
             y=df_open["Open"],
             mode="lines",
-            marker=dict(color=baby_blue[8]),
+            marker={"color": baby_blue[8]},
             name="Open",
             hovertemplate="PRs Open: %{y}<br>%{x|%b %d, %Y} <extra></extra>",
         )
     )
 
     return fig
-
-
-# for each day, this function calculates the amount of open prs
-def get_open(df, date):
-    # drop rows that are more recent than the date limit
-    df_created = df[df["created_at"] <= date]
-
-    # drops rows that have been closed after date
-    df_open = df_created[df_created["closed_at"] > date]
-
-    # include prs that have not been close yet
-    df_open = pd.concat([df_open, df_created[df_created.closed_at.isnull()]])
-
-    # generates number of columns ie open prs
-    num_open = df_open.shape[0]
-    return num_open
