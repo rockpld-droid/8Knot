@@ -1,19 +1,18 @@
-from dash import callback
-import dash_bootstrap_components as dbc
-from dash.dependencies import Input, Output
-import plotly.graph_objects as go
-import pandas as pd
 import logging
-from dateutil.relativedelta import *  # type: ignore
-import plotly.express as px
-from pages.utils.graph_utils import get_graph_time_values, baby_blue
-from queries.pr_response_query import pr_response_query as prr
-import io
-import cache_manager.cache_facade as cf
-from pages.utils.job_utils import nodata_graph
 import time
-import app
+
+import cache_manager.cache_facade as cf
+import dash_bootstrap_components as dbc
+import numpy as np
+import pandas as pd
+import plotly.graph_objects as go
 from components.visualization import VisualizationAIO
+from dash import callback
+from dash.dependencies import Input, Output
+from dateutil.relativedelta import *  # type: ignore
+from pages.utils.graph_utils import baby_blue
+from pages.utils.job_utils import nodata_graph
+from queries.pr_response_query import pr_response_query as prr
 
 PAGE = "contributions"
 VIZ_ID = "pr-first-response"
@@ -64,8 +63,8 @@ gc_pr_first_response = VisualizationAIO(
     background=True,
 )
 def pr_first_response_graph(repolist, num_days, bot_switch):
-    while not_cached := cf.get_uncached(func_name=prr.__name__, repolist=repolist):
-        logging.warning(f"PR_FIRST_RESPONSE - WAITING ON DATA TO BECOME AVAILABLE")
+    while cf.get_uncached(func_name=prr.__name__, repolist=repolist):
+        logging.warning("PR_FIRST_RESPONSE - WAITING ON DATA TO BECOME AVAILABLE")
         time.sleep(0.5)
 
     start = time.perf_counter()
@@ -120,12 +119,31 @@ def process_data(df: pd.DataFrame, num_days):
 
     # every day, count the number of PRs that are open on that day and the number of
     # those that were responded to within num_days of their opening
-    df_pr_responses["Open"], df_pr_responses["Response"] = zip(
-        *df_pr_responses.apply(
-            lambda row: get_open_response(df, row.Date, num_days),
-            axis=1,
-        )
+    # Optimization: Vectorized calculation using np.searchsorted
+    # Instead of O(N*D) dataframe filtering in a loop, we sort the dates and use binary search
+    # open_count = (created <= date) - (closed <= date)
+    df["responded_in_time"] = df["msg_timestamp"] < (
+        df["pr_created_at"] + pd.DateOffset(days=num_days)
     )
+
+    created_counts = np.searchsorted(
+        np.sort(df["pr_created_at"].values), dates.values, side="right"
+    )
+    closed_counts = np.searchsorted(
+        np.sort(df["pr_closed_at"].dropna().values), dates.values, side="right"
+    )
+    df_pr_responses["Open"] = created_counts - closed_counts
+
+    df_responded = df[df["responded_in_time"]]
+    resp_created_counts = np.searchsorted(
+        np.sort(df_responded["pr_created_at"].values), dates.values, side="right"
+    )
+    resp_closed_counts = np.searchsorted(
+        np.sort(df_responded["pr_closed_at"].dropna().values),
+        dates.values,
+        side="right",
+    )
+    df_pr_responses["Response"] = resp_created_counts - resp_closed_counts
 
     df_pr_responses["Date"] = df_pr_responses["Date"].dt.strftime("%Y-%m-%d")
 
@@ -142,7 +160,7 @@ def create_figure(df: pd.DataFrame, num_days):
                 mode="lines",
                 showlegend=True,
                 hovertemplate="PR's Open: %{y}<br>%{x|%b %d, %Y} <extra></extra>",
-                marker=dict(color=baby_blue[8]),
+                marker={"color": baby_blue[8]},
             ),
             go.Scatter(
                 name="Response <" + str(num_days) + " days",
@@ -151,58 +169,14 @@ def create_figure(df: pd.DataFrame, num_days):
                 mode="lines",
                 showlegend=True,
                 hovertemplate="PRs: %{y}<br>%{x|%b %d, %Y} <extra></extra>",
-                marker=dict(color=baby_blue[2]),
+                marker={"color": baby_blue[2]},
             ),
         ]
     )
     fig.update_layout(
         xaxis_title="Time",
         yaxis_title="Number of PRs",
-        font=dict(size=14),
+        font={"size": 14},
     )
 
     return fig
-
-
-def get_open_response(df, date, num_days):
-    """
-    This function takes a date and determines how many
-    prs in that time interval are opened and if they have a response within num_days.
-
-    Args:
-    -----
-        df : Pandas Dataframe
-            Dataframe with pr assignment actions of the assignees
-
-        date : Datetime Timestamp
-            Timestamp of the date
-
-        num_days : int
-            number of days that a response should be within
-
-    Returns:
-    --------
-        int, int: Number of opened and responded to prs within num_days on the day
-    """
-    # drop rows that are more recent than the date limit
-    df_created = df[df["pr_created_at"] <= date]
-
-    # drops rows that have been closed after date
-    df_open = df_created[df_created["pr_closed_at"] > date]
-
-    # include prs that have not been close yet
-    df_open = pd.concat([df_open, df_created[df_created.pr_closed_at.isnull()]])
-
-    # column to hold date num_days after the pr_creation date for comparision
-    df_open["response_by"] = df_open["pr_created_at"] + pd.DateOffset(days=num_days)
-
-    # Inlcude only the prs that msg timestamp is before the responded by time
-    df_response = df_open[df_open["msg_timestamp"] < df_open["response_by"]]
-
-    # generates number of columns ie open prs
-    num_open = df_open.shape[0]
-
-    # number of prs that had response in time interval
-    num_response = df_response.shape[0]
-
-    return num_open, num_response

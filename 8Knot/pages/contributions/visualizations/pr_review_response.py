@@ -1,17 +1,17 @@
-from dash import callback
-import dash_bootstrap_components as dbc
-from dash.dependencies import Input, Output
-import plotly.graph_objects as go
-import pandas as pd
 import logging
+import time
+
+import cache_manager.cache_facade as cf
+import dash_bootstrap_components as dbc
+import pandas as pd
+import plotly.graph_objects as go
+from components.visualization import VisualizationAIO
+from dash import callback
+from dash.dependencies import Input, Output
 from dateutil.relativedelta import *  # type: ignore
 from pages.utils.graph_utils import baby_blue
-from queries.pr_response_query import pr_response_query as prr
 from pages.utils.job_utils import nodata_graph
-import time
-import app
-import cache_manager.cache_facade as cf
-from components.visualization import VisualizationAIO
+from queries.pr_response_query import pr_response_query as prr
 
 PAGE = "contributions"
 VIZ_ID = "pr-review-response"
@@ -63,8 +63,8 @@ gc_pr_review_response = VisualizationAIO(
     background=True,
 )
 def pr_review_response_graph(repolist, num_days, bot_switch):
-    while not_cached := cf.get_uncached(func_name=prr.__name__, repolist=repolist):
-        logging.warning(f"PR_FIRST_RESPONSE - WAITING ON DATA TO BECOME AVAILABLE")
+    while cf.get_uncached(func_name=prr.__name__, repolist=repolist):
+        logging.warning("PR_FIRST_RESPONSE - WAITING ON DATA TO BECOME AVAILABLE")
         time.sleep(0.5)
 
     start = time.perf_counter()
@@ -140,7 +140,7 @@ def create_figure(df: pd.DataFrame, num_days):
                 mode="lines",
                 showlegend=True,
                 hovertemplate="PR's Open: %{y}<br>%{x|%b %d, %Y} <extra></extra>",
-                marker=dict(color=baby_blue[8]),
+                marker={"color": baby_blue[8]},
             ),
             go.Scatter(
                 name="Response <" + str(num_days) + " days",
@@ -149,14 +149,14 @@ def create_figure(df: pd.DataFrame, num_days):
                 mode="lines",
                 showlegend=True,
                 hovertemplate="PRs: %{y}<br>%{x|%b %d, %Y} <extra></extra>",
-                marker=dict(color=baby_blue[2]),
+                marker={"color": baby_blue[2]},
             ),
         ]
     )
     fig.update_layout(
         xaxis_title="Time",
         yaxis_title="Number of PRs",
-        font=dict(size=14),
+        font={"size": 14},
     )
 
     return fig
@@ -190,7 +190,9 @@ def get_open_response(df, date, num_days):
     df_open_at_date = df_created[df_created["pr_closed_at"] > date]
 
     # include prs that have not been close yet
-    df_open_at_date = pd.concat([df_open_at_date, df_created[df_created.pr_closed_at.isnull()]])
+    df_open_at_date = pd.concat(
+        [df_open_at_date, df_created[df_created.pr_closed_at.isnull()]]
+    )
 
     # number of columns in df ie number of open prs
     num_open = df_open_at_date.shape[0]
@@ -206,7 +208,9 @@ def get_open_response(df, date, num_days):
     df_messages_in_range = df_open_at_date[df_open_at_date["msg_timestamp"] < date]
 
     # order messages from earliest to latest by timestamp
-    df_messages_in_range = df_messages_in_range.sort_values(by="msg_timestamp", axis=0, ascending=True)
+    df_messages_in_range = df_messages_in_range.sort_values(
+        by="msg_timestamp", axis=0, ascending=True
+    )
 
     # threshold of when the last response would need to be by
     before_date_by_num_days = date - pd.DateOffset(days=num_days)
