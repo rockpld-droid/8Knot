@@ -3,6 +3,7 @@ from dash import callback
 from dash.dependencies import Input, Output
 import plotly.graph_objects as go
 import pandas as pd
+import numpy as np
 import logging
 from pages.utils.graph_utils import get_graph_time_values, baby_blue
 from pages.utils.job_utils import nodata_graph
@@ -159,8 +160,15 @@ def process_data(df: pd.DataFrame, interval):
     # df for open prs from time interval
     df_open = dates.to_frame(index=False, name="Date")
 
-    # aplies function to get the amount of open prs for each day
-    df_open["Open"] = df_open.apply(lambda row: get_open(df, row.Date), axis=1)
+    # performance optimization: use numpy searchsorted to get open prs instead of slow apply + filtering row-by-row
+    created_sorted = df["created_at"].dropna().sort_values().values
+    closed_sorted = df["closed_at"].dropna().sort_values().values
+    date_values = df_open["Date"].values
+
+    created_counts = np.searchsorted(created_sorted, date_values, side='right')
+    closed_counts = np.searchsorted(closed_sorted, date_values, side='right')
+
+    df_open["Open"] = created_counts - closed_counts
 
     df_open["Date"] = df_open["Date"].dt.strftime("%Y-%m-%d")
 
@@ -233,18 +241,3 @@ def create_figure(
 
     return fig
 
-
-# for each day, this function calculates the amount of open prs
-def get_open(df, date):
-    # drop rows that are more recent than the date limit
-    df_created = df[df["created_at"] <= date]
-
-    # drops rows that have been closed after date
-    df_open = df_created[df_created["closed_at"] > date]
-
-    # include prs that have not been close yet
-    df_open = pd.concat([df_open, df_created[df_created.closed_at.isnull()]])
-
-    # generates number of columns ie open prs
-    num_open = df_open.shape[0]
-    return num_open
