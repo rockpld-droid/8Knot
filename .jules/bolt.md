@@ -1,0 +1,3 @@
+## 2024-10-27 - [Avoid `.apply` for Cumulative Counts]
+**Learning:** Using `pandas.DataFrame.apply(..., axis=1)` for row-by-row operations over a date series to count cumulative active events (like "open issues" or "open PRs") results in $O(N \times D)$ complexity. This creates a severe performance bottleneck, especially when scaling data and date ranges.
+**Action:** Replace this pattern with a vectorized approach using `numpy.searchsorted` on sorted arrays of start and end dates. Counting active events at any date becomes a simple difference of two counts: `created_counts - closed_counts`. This reduces the complexity to $O((N + D) \log N)$ and is vastly faster.
