@@ -3,6 +3,7 @@ import dash_bootstrap_components as dbc
 from dash.dependencies import Input, Output
 import plotly.graph_objects as go
 import pandas as pd
+import numpy as np
 import logging
 from pages.utils.graph_utils import get_graph_time_values, baby_blue
 from pages.utils.job_utils import nodata_graph
@@ -206,8 +207,17 @@ def process_data(df: pd.DataFrame, interval, start_date, end_date, label_filter)
     # df for open issues for time interval
     df_open = dates.to_frame(index=False, name="Date")
 
-    # aplies function to get the amount of open issues for each day
-    df_open["Open"] = df_open.apply(lambda row: get_open(df, row.Date), axis=1)
+    # Performance optimization: Replace row-by-row apply with vectorized numpy searchsorted
+    # Reduces complexity from O(n * m) to O(m log n) where n=issues, m=dates
+    created_sorted = np.sort(df["created_at"].dropna().values)
+    closed_sorted = np.sort(df["closed_at"].dropna().values)
+    dates_np = df_open["Date"].values
+
+    created_counts = np.searchsorted(created_sorted, dates_np, side="right")
+    closed_counts = np.searchsorted(closed_sorted, dates_np, side="right")
+
+    # Open issues = (Total created up to this date) - (Total closed up to this date)
+    df_open["Open"] = created_counts - closed_counts
 
     # formatting for graph generation
     if interval == "M":
@@ -265,19 +275,3 @@ def create_figure(df_created: pd.DataFrame, df_closed: pd.DataFrame, df_open: pd
     )
 
     return fig
-
-
-# for each day, this function calculates the amount of open issues
-def get_open(df, date):
-    # drop rows that are more recent than the date limit
-    df_lim = df[df["created_at"] <= date]
-
-    # drops rows that have been closed after date
-    df_open = df_lim[df_lim["closed_at"] > date]
-
-    # include issues that have not been close yet
-    df_open = pd.concat([df_open, df_lim[df_lim.closed_at.isnull()]])
-
-    # generates number of columns ie open issues
-    num_open = df_open.shape[0]
-    return num_open
