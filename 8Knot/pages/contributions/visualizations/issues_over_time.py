@@ -200,14 +200,28 @@ def process_data(df: pd.DataFrame, interval, start_date, end_date, label_filter)
         df_closed = df_closed[df_closed.Date <= end_date]
         latest = end_date
 
+    import numpy as np
+
     # beginning to the end of time by the specified interval
     dates = pd.date_range(start=earliest, end=latest, freq="D", inclusive="both")
 
     # df for open issues for time interval
     df_open = dates.to_frame(index=False, name="Date")
 
-    # aplies function to get the amount of open issues for each day
-    df_open["Open"] = df_open.apply(lambda row: get_open(df, row.Date), axis=1)
+    # Performance optimization: use vectorized operations instead of df.apply(..., axis=1)
+    # See .jules/bolt.md for details on the performance gain.
+    created_sorted = np.sort(df["created_at"].dropna().values)
+    closed_sorted = np.sort(df["closed_at"].dropna().values)
+
+    dates_np = df_open["Date"].values
+
+    # Count how many issues were created on or before each date
+    created_counts = np.searchsorted(created_sorted, dates_np, side="right")
+    # Count how many issues were closed on or before each date
+    closed_counts = np.searchsorted(closed_sorted, dates_np, side="right")
+
+    # Total open issues is the difference
+    df_open["Open"] = created_counts - closed_counts
 
     # formatting for graph generation
     if interval == "M":
@@ -265,19 +279,3 @@ def create_figure(df_created: pd.DataFrame, df_closed: pd.DataFrame, df_open: pd
     )
 
     return fig
-
-
-# for each day, this function calculates the amount of open issues
-def get_open(df, date):
-    # drop rows that are more recent than the date limit
-    df_lim = df[df["created_at"] <= date]
-
-    # drops rows that have been closed after date
-    df_open = df_lim[df_lim["closed_at"] > date]
-
-    # include issues that have not been close yet
-    df_open = pd.concat([df_open, df_lim[df_lim.closed_at.isnull()]])
-
-    # generates number of columns ie open issues
-    num_open = df_open.shape[0]
-    return num_open
