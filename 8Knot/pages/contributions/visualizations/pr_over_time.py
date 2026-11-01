@@ -3,6 +3,7 @@ from dash import callback
 from dash.dependencies import Input, Output
 import plotly.graph_objects as go
 import pandas as pd
+import numpy as np
 import logging
 from pages.utils.graph_utils import get_graph_time_values, baby_blue
 from pages.utils.job_utils import nodata_graph
@@ -68,7 +69,7 @@ gc_pr_over_time = VisualizationAIO(
 def prs_over_time_graph(repolist, interval):
     # wait for data to asynchronously download and become available.
     while not_cached := cf.get_uncached(func_name=prq.__name__, repolist=repolist):
-        logging.warning(f"PULL REQUESTS OVER TIME - WAITING ON DATA TO BECOME AVAILABLE")
+        logging.warning("PULL REQUESTS OVER TIME - WAITING ON DATA TO BECOME AVAILABLE")
         time.sleep(0.5)
 
     # data ready.
@@ -160,7 +161,16 @@ def process_data(df: pd.DataFrame, interval):
     df_open = dates.to_frame(index=False, name="Date")
 
     # aplies function to get the amount of open prs for each day
-    df_open["Open"] = df_open.apply(lambda row: get_open(df, row.Date), axis=1)
+    # sort values for faster search
+    sorted_created = df["created_at"].sort_values().values
+    sorted_closed = df["closed_at"].dropna().sort_values().values
+
+    # use np.searchsorted to find the number of PRs created and closed before each date
+    # this vectorized approach is significantly faster than row-by-row apply
+    created_counts = np.searchsorted(sorted_created, df_open["Date"].values, side="right")
+    closed_counts = np.searchsorted(sorted_closed, df_open["Date"].values, side="right")
+
+    df_open["Open"] = created_counts - closed_counts
 
     df_open["Date"] = df_open["Date"].dt.strftime("%Y-%m-%d")
 
@@ -232,19 +242,3 @@ def create_figure(
     )
 
     return fig
-
-
-# for each day, this function calculates the amount of open prs
-def get_open(df, date):
-    # drop rows that are more recent than the date limit
-    df_created = df[df["created_at"] <= date]
-
-    # drops rows that have been closed after date
-    df_open = df_created[df_created["closed_at"] > date]
-
-    # include prs that have not been close yet
-    df_open = pd.concat([df_open, df_created[df_created.closed_at.isnull()]])
-
-    # generates number of columns ie open prs
-    num_open = df_open.shape[0]
-    return num_open
