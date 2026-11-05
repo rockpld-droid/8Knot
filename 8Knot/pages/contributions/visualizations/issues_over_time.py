@@ -3,6 +3,7 @@ import dash_bootstrap_components as dbc
 from dash.dependencies import Input, Output
 import plotly.graph_objects as go
 import pandas as pd
+import numpy as np
 import logging
 from pages.utils.graph_utils import get_graph_time_values, baby_blue
 from pages.utils.job_utils import nodata_graph
@@ -117,8 +118,8 @@ gc_issues_over_time = VisualizationAIO(
 )
 def issues_over_time_graph(repolist, interval, start_date, end_date, label_filter):
     # wait for data to asynchronously download and become available.
-    while not_cached := cf.get_uncached(func_name=iq.__name__, repolist=repolist):
-        logging.warning(f"ISSUES OVER TIME - WAITING ON DATA TO BECOME AVAILABLE")
+    while cf.get_uncached(func_name=iq.__name__, repolist=repolist):
+        logging.warning("ISSUES OVER TIME - WAITING ON DATA TO BECOME AVAILABLE")
         time.sleep(0.5)
 
     # data ready.
@@ -206,8 +207,16 @@ def process_data(df: pd.DataFrame, interval, start_date, end_date, label_filter)
     # df for open issues for time interval
     df_open = dates.to_frame(index=False, name="Date")
 
-    # aplies function to get the amount of open issues for each day
-    df_open["Open"] = df_open.apply(lambda row: get_open(df, row.Date), axis=1)
+    # get the amount of open issues for each day using vectorized operations
+    created_dates = df["created_at"].dropna().sort_values().values
+    closed_dates = df["closed_at"].dropna().sort_values().values
+    dates_arr = df_open["Date"].values
+
+    # open count is the number of issues created before/on the date MINUS the number of issues closed before/on the date
+    # side="right" means we include issues created/closed on the exact date
+    df_open["Open"] = np.searchsorted(created_dates, dates_arr, side="right") - np.searchsorted(
+        closed_dates, dates_arr, side="right"
+    )
 
     # formatting for graph generation
     if interval == "M":
@@ -265,19 +274,3 @@ def create_figure(df_created: pd.DataFrame, df_closed: pd.DataFrame, df_open: pd
     )
 
     return fig
-
-
-# for each day, this function calculates the amount of open issues
-def get_open(df, date):
-    # drop rows that are more recent than the date limit
-    df_lim = df[df["created_at"] <= date]
-
-    # drops rows that have been closed after date
-    df_open = df_lim[df_lim["closed_at"] > date]
-
-    # include issues that have not been close yet
-    df_open = pd.concat([df_open, df_lim[df_lim.closed_at.isnull()]])
-
-    # generates number of columns ie open issues
-    num_open = df_open.shape[0]
-    return num_open
