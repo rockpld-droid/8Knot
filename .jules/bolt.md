@@ -1,0 +1,3 @@
+## 2024-05-24 - Pandas Row-by-Row Apply Optimization
+**Learning:** Found significant O(N*M) bottlenecks in calculating open/active items over time where `pandas.DataFrame.apply(axis=1)` was used with an inline function to iterate the entire dataframe to count active records for each specific date.
+**Action:** Replaced the apply methodology with vectorized `numpy.searchsorted()` arrays by sorting created and closed dates once and binary searching the target dates for cumulative creations and closures. The difference determines open counts. Avoid using `.apply()` across axes for filtering logic in visualizations.
