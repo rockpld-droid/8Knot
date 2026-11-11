@@ -242,3 +242,19 @@ def create_figure(
     )
 
     return fig
+
+
+# for each day, this function calculates the amount of open prs
+def get_open(df, date):
+    # drop rows that are more recent than the date limit
+    df_created = df[df["created_at"] <= date]
+
+    # drops rows that have been closed after date
+    df_open = df_created[df_created["closed_at"] > date]
+
+    # include prs that have not been close yet
+    df_open = pd.concat([df_open, df_created[df_created.closed_at.isnull()]])
+
+    # generates number of columns ie open prs
+    num_open = df_open.shape[0]
+    return num_open

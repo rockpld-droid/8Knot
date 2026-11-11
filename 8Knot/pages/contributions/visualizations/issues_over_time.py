@@ -275,3 +275,19 @@ def create_figure(df_created: pd.DataFrame, df_closed: pd.DataFrame, df_open: pd
     )
 
     return fig
+
+
+# for each day, this function calculates the amount of open issues
+def get_open(df, date):
+    # drop rows that are more recent than the date limit
+    df_lim = df[df["created_at"] <= date]
+
+    # drops rows that have been closed after date
+    df_open = df_lim[df_lim["closed_at"] > date]
+
+    # include issues that have not been close yet
+    df_open = pd.concat([df_open, df_lim[df_lim.closed_at.isnull()]])
+
+    # generates number of columns ie open issues
+    num_open = df_open.shape[0]
+    return num_open
