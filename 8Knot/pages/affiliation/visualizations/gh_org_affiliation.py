@@ -10,7 +10,7 @@ from queries.affiliation_query import affiliation_query as aq
 from pages.utils.job_utils import nodata_graph
 import time
 import datetime as dt
-from rapidfuzz import fuzz
+from rapidfuzz import fuzz, process
 import app
 import cache_manager.cache_facade as cf
 from components.visualization import VisualizationAIO
@@ -136,7 +136,14 @@ def process_data(df: pd.DataFrame, num, start_date, end_date):
     df = df.rename(columns={"cntrb_company": "orginal_name", "count": "contribution_count"})
 
     # applies fuzzy matching comparing all rows to each other
-    df["match"] = df.apply(lambda row: fuzzy_match(df, row["company_name"]), axis=1)
+    # ⚡ Bolt Optimization: Replacing O(N*M) df.apply(axis=1) with vectorized rapidfuzz.process.extract
+    # Expected impact: Significantly reduces the time to compute fuzzy string matching
+    company_names = df["company_name"].tolist()
+    new_matches = []
+    for name in company_names:
+        matches = process.extract(name, company_names, scorer=fuzz.partial_ratio, score_cutoff=70, limit=None)
+        new_matches.append(sorted([x[2] for x in matches]))
+    df["match"] = new_matches
 
     # changes company name to match other fuzzy matches
     for x in range(0, len(df)):
@@ -170,17 +177,6 @@ def process_data(df: pd.DataFrame, num, start_date, end_date):
     )
 
     return df
-
-
-def fuzzy_match(df, name):
-    """
-    This function compares each row to all of the other values in the company_name column and
-    outputs a list on if there is a fuzzy match between the different rows. This gives the values
-    necessary for the loop to change the company name if there is a match. 70 is the match value
-    threshold for the partial ratio to be considered a match
-    """
-    matches = df.apply(lambda row: (fuzz.partial_ratio(row["company_name"], name, score_cutoff=70) >= 70), axis=1)
-    return [i for i, x in enumerate(matches) if x]
 
 
 def create_figure(df: pd.DataFrame):
